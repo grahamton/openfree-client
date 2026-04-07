@@ -21,6 +21,6 @@ reqwest = { version = "0.12", features = ["multipart", "json"] }
 cpal = "0.15"
 hound = "3.5"
 enigo = "0.2"
-global-hotkey = "0.6"
+tauri-plugin-global-shortcut = "2"
 arboard = "3"
 

@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Claude Code session data
+.claude/
+
+# Planning docs
+\# OpenFree*
