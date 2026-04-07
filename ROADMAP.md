@@ -7,13 +7,13 @@ Incremental improvements only. The app works — don't break it chasing features
 ## Server-side
 
 ### Tier 1 — Quick wins
-- [ ] Add `initial_prompt` to Whisper call with user vocabulary and common acronyms
-- [ ] Tune prompt to ensure consistent punctuation and capitalization
-- [ ] Pin Whisper model size so cold-start time is predictable
-- [ ] Remove Ollama/LLM layer if no longer needed (simplifies the pipeline)
+- [x] Add `initial_prompt` to Whisper call with user vocabulary and common acronyms
+- [x] Tune prompt to ensure consistent punctuation and capitalization
+- [x] Pin Whisper model size so cold-start time is predictable (`large-v3-turbo`)
+- [x] Remove Ollama/LLM layer (simplified pipeline, ~1-2s latency)
 
 ### Tier 2 — Config and reliability
-- [ ] Load `initial_prompt` from a config file or env var (so it can be edited without touching code)
+- [x] Load `initial_prompt` from a config file (`/opt/docker/openfree/prompt.txt` — edit anytime, no rebuild)
 - [ ] Return a structured error when Whisper fails (currently returns generic 500)
 - [ ] Add a `/health` endpoint so the client can check server status
 
