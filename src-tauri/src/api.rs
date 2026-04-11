@@ -2,7 +2,7 @@ use reqwest::multipart;
 use std::error::Error;
 use std::path::PathBuf;
 
-pub async fn send_audio(audio_path: &PathBuf, server_url: &str) -> Result<String, String> {
+pub async fn send_audio(audio_path: &PathBuf, server_url: &str, initial_prompt: Option<String>) -> Result<String, String> {
     let file_bytes = std::fs::read(audio_path).map_err(|e| e.to_string())?;
 
     let part = multipart::Part::bytes(file_bytes)
@@ -10,7 +10,12 @@ pub async fn send_audio(audio_path: &PathBuf, server_url: &str) -> Result<String
         .mime_str("audio/wav")
         .map_err(|e| e.to_string())?;
 
-    let form = multipart::Form::new().part("audio", part);
+    let mut form = multipart::Form::new().part("audio", part);
+    if let Some(prompt) = initial_prompt {
+        if !prompt.is_empty() {
+            form = form.text("initial_prompt", prompt);
+        }
+    }
 
     let client = reqwest::Client::builder()
         .no_proxy()

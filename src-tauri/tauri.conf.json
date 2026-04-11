@@ -21,6 +21,18 @@
         "skipTaskbar": true,
         "resizable": false,
         "visible": false
+      },
+      {
+        "label": "settings",
+        "title": "OpenFree Settings",
+        "width": 480,
+        "height": 320,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "resizable": false,
+        "visible": false
       }
     ],
     "security": {

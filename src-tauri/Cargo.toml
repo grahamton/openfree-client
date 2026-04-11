@@ -22,5 +22,6 @@ cpal = "0.15"
 hound = "3.5"
 enigo = "0.2"
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-autostart = "2"
 arboard = "3"
 
