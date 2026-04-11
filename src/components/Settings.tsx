@@ -11,8 +11,30 @@ export function Settings() {
   const [config, setConfig] = useState<AppConfig>({ initial_prompt: "", autostart: false });
   const [saved, setSaved] = useState(false);
 
+  const loadConfig = async () => {
+    try {
+      const cfg = await invoke<AppConfig>("get_config");
+      setConfig(cfg);
+    } catch (error) {
+      console.error("Failed to load config:", error);
+    }
+  };
+
   useEffect(() => {
-    invoke<AppConfig>("get_config").then(setConfig).catch(console.error);
+    // Load config on initial mount
+    loadConfig();
+
+    // Reload config when window regains focus (for reopening)
+    const window = getCurrentWebviewWindow();
+    const unlisten = window.onFocusChanged(({ payload: focused }) => {
+      if (focused) {
+        loadConfig();
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, []);
 
   function handleSave() {
@@ -25,7 +47,19 @@ export function Settings() {
   }
 
   async function handleClose() {
-    await getCurrentWebviewWindow().hide();
+    // Use minimize instead of hide for better Tauri 2.x compatibility
+    // This ensures the window state is properly preserved for reopening
+    try {
+      await getCurrentWebviewWindow().minimize();
+    } catch (error) {
+      console.error("Failed to minimize settings window:", error);
+      // Fallback to hide if minimize fails
+      try {
+        await getCurrentWebviewWindow().hide();
+      } catch (err) {
+        console.error("Failed to hide settings window:", err);
+      }
+    }
   }
 
   return (

@@ -208,6 +208,8 @@ pub fn run() {
                 .on_menu_event(|app, event| {
                     if event.id == "settings" {
                         if let Some(w) = app.get_webview_window("settings") {
+                            // Try to unminimize first, then show with focus
+                            let _ = w.unminimize();
                             let _ = w.show();
                             let _ = w.set_focus();
                         }
