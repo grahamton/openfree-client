@@ -5,33 +5,38 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 interface AppConfig {
   initial_prompt: string;
   autostart: boolean;
+  transcription_mode: string;
+  whisper_model_path: string;
+  server_url: string;
 }
 
+const DEFAULT_CONFIG: AppConfig = {
+  initial_prompt: "",
+  autostart: false,
+  transcription_mode: "local",
+  whisper_model_path: "",
+  server_url: "http://100.120.247.76:8766/transcribe",
+};
+
 export function Settings() {
-  const [config, setConfig] = useState<AppConfig>({ initial_prompt: "", autostart: false });
+  const [config, setConfig] = useState<AppConfig>(DEFAULT_CONFIG);
   const [saved, setSaved] = useState(false);
 
   const loadConfig = async () => {
     try {
       const cfg = await invoke<AppConfig>("get_config");
-      setConfig(cfg);
+      setConfig({ ...DEFAULT_CONFIG, ...cfg });
     } catch (error) {
       console.error("Failed to load config:", error);
     }
   };
 
   useEffect(() => {
-    // Load config on initial mount
     loadConfig();
-
-    // Reload config when window regains focus (for reopening)
     const window = getCurrentWebviewWindow();
     const unlisten = window.onFocusChanged(({ payload: focused }) => {
-      if (focused) {
-        loadConfig();
-      }
+      if (focused) loadConfig();
     });
-
     return () => {
       unlisten.then((fn) => fn());
     };
@@ -47,13 +52,9 @@ export function Settings() {
   }
 
   async function handleClose() {
-    // Use minimize instead of hide for better Tauri 2.x compatibility
-    // This ensures the window state is properly preserved for reopening
     try {
       await getCurrentWebviewWindow().minimize();
-    } catch (error) {
-      console.error("Failed to minimize settings window:", error);
-      // Fallback to hide if minimize fails
+    } catch {
       try {
         await getCurrentWebviewWindow().hide();
       } catch (err) {
@@ -62,33 +63,82 @@ export function Settings() {
     }
   }
 
+  const isLocal = config.transcription_mode !== "remote";
+
   return (
     <div style={{ fontFamily: "system-ui, sans-serif", padding: "24px", color: "#1a1a1a" }}>
       <h2 style={{ margin: "0 0 20px", fontSize: "16px", fontWeight: 600 }}>OpenFree Settings</h2>
 
-      <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: 500 }}>
-        Transcription Prompt
-      </label>
-      <p style={{ margin: "0 0 8px", fontSize: "12px", color: "#666" }}>
-        Primes Whisper with your vocabulary. Include your name, acronyms, and domain terms.
+      {/* Transcription backend */}
+      <label style={labelStyle}>Transcription Backend</label>
+      <p style={hintStyle}>
+        Local runs Whisper on your laptop. Remote sends audio to your home server.
+        Changes take effect after restarting the app.
       </p>
-      <textarea
-        value={config.initial_prompt}
-        onChange={e => setConfig(c => ({ ...c, initial_prompt: e.target.value }))}
-        placeholder="e.g. Graham. Common terms: API, LLM, OpenFree, Tailscale."
-        style={{
-          width: "100%",
-          height: "120px",
-          padding: "8px",
-          fontSize: "13px",
-          border: "1px solid #d0d0d0",
-          borderRadius: "6px",
-          resize: "none",
-          boxSizing: "border-box",
-          fontFamily: "inherit",
-        }}
-      />
+      <select
+        value={config.transcription_mode}
+        onChange={e => setConfig(c => ({ ...c, transcription_mode: e.target.value }))}
+        style={{ ...inputStyle, height: "32px", padding: "4px 8px" }}
+      >
+        <option value="local">Local (Whisper on this machine)</option>
+        <option value="remote">Remote (home server)</option>
+      </select>
 
+      {/* Local: model path */}
+      {isLocal && (
+        <div style={{ marginTop: "16px" }}>
+          <label style={labelStyle}>Whisper Model Path</label>
+          <p style={hintStyle}>
+            Path to a GGML .bin file — e.g.{" "}
+            <code style={{ fontSize: "11px", background: "#f4f4f4", padding: "1px 4px", borderRadius: "3px" }}>
+              ggml-base.en-q5_1.bin
+            </code>.{" "}
+            Download models from{" "}
+            <span style={{ color: "#2563eb" }}>huggingface.co/ggerganov/whisper.cpp</span>.
+          </p>
+          <input
+            type="text"
+            value={config.whisper_model_path}
+            onChange={e => setConfig(c => ({ ...c, whisper_model_path: e.target.value }))}
+            placeholder="C:\Users\you\models\ggml-base.en-q5_1.bin"
+            style={inputStyle}
+          />
+        </div>
+      )}
+
+      {/* Remote: server URL */}
+      {!isLocal && (
+        <div style={{ marginTop: "16px" }}>
+          <label style={labelStyle}>Server URL</label>
+          <input
+            type="text"
+            value={config.server_url}
+            onChange={e => setConfig(c => ({ ...c, server_url: e.target.value }))}
+            placeholder="http://100.120.247.76:8766/transcribe"
+            style={inputStyle}
+          />
+        </div>
+      )}
+
+      {/* Transcription prompt */}
+      <div style={{ marginTop: "16px" }}>
+        <label style={labelStyle}>Transcription Prompt</label>
+        <p style={hintStyle}>
+          Primes Whisper with your vocabulary. Include your name, acronyms, and domain terms.
+        </p>
+        <textarea
+          value={config.initial_prompt}
+          onChange={e => setConfig(c => ({ ...c, initial_prompt: e.target.value }))}
+          placeholder="e.g. Graham. Common terms: API, LLM, OpenFree, Tailscale."
+          style={{
+            ...inputStyle,
+            height: "100px",
+            resize: "none",
+          }}
+        />
+      </div>
+
+      {/* Autostart */}
       <label style={{ display: "flex", alignItems: "center", gap: "8px", margin: "16px 0", fontSize: "13px", cursor: "pointer" }}>
         <input
           type="checkbox"
@@ -97,6 +147,12 @@ export function Settings() {
         />
         Start on login
       </label>
+
+      {/* Hotkey reminder */}
+      <p style={{ ...hintStyle, marginBottom: "16px", borderTop: "1px solid #eee", paddingTop: "12px" }}>
+        <strong>Hold-to-talk:</strong> Ctrl+Shift+Space&nbsp;&nbsp;
+        <strong>Toggle (for long recordings):</strong> Ctrl+Shift+Alt+Space
+      </p>
 
       <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
         <button onClick={handleClose} style={secondaryBtn}>Close</button>
@@ -107,6 +163,30 @@ export function Settings() {
     </div>
   );
 }
+
+const labelStyle: React.CSSProperties = {
+  display: "block",
+  marginBottom: "4px",
+  fontSize: "13px",
+  fontWeight: 500,
+};
+
+const hintStyle: React.CSSProperties = {
+  margin: "0 0 8px",
+  fontSize: "12px",
+  color: "#666",
+  lineHeight: 1.4,
+};
+
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  padding: "8px",
+  fontSize: "13px",
+  border: "1px solid #d0d0d0",
+  borderRadius: "6px",
+  boxSizing: "border-box",
+  fontFamily: "inherit",
+};
 
 const primaryBtn: React.CSSProperties = {
   padding: "7px 18px",
