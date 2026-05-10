@@ -22,15 +22,20 @@ Incremental improvements only. The app works — don't break it chasing features
 ## Client-side
 
 ### Tier 1 — Quick wins
-- [ ] Start on login (Tauri `tauri-plugin-autostart` — one-liner)
-- [ ] Show error state in pill when server is unreachable (currently silently times out)
+- [x] Start on login (`tauri-plugin-autostart`)
+- [x] Show error state in pill when transcription fails
+- [x] Settings window: editable `initial_prompt` and personal vocabulary
 
 ### Tier 2 — Quality of life
-- [ ] Settings window: editable personal dictionary / `initial_prompt` sent with each request
+- [x] Local Whisper via `whisper-rs` — runs entirely on laptop, no server needed
+- [x] Toggle hotkey (`Ctrl+Shift+Alt+Space`) for hands-free long recordings
+- [x] Configurable backend (local vs remote) and model path in Settings
 - [ ] Build a proper installer (`.msi`) so the app doesn't require `npm run tauri dev` to run
-- [ ] Configurable hotkey (currently hardcoded `Ctrl+Shift+Space`)
+- [ ] Configurable hotkey (currently hardcoded)
+- [ ] Auto-add cmake/LLVM to PATH in dev environment so the manual env var step isn't needed
 
 ### Tier 3 — Nice to have
+- [ ] LLM cleanup pass via LM Studio after transcription (punctuation polish, acronym expansion, style)
 - [ ] Per-app context: different prompt/vocabulary depending on the active window (Slack, VS Code, email, etc.)
-- [ ] Local Whisper fallback if server is unreachable
 - [ ] Transcription history (last N injections, accessible from tray)
+- [ ] GPU acceleration (Vulkan) for longer recordings — build with `--features gpu`

@@ -2,6 +2,8 @@ mod audio;
 mod api;
 mod inject;
 mod config;
+mod transcribe;
+mod whisper;
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -11,10 +13,15 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
+use transcribe::Transcriber;
 
-const SERVER_URL: &str = "http://100.120.247.76:8766/transcribe";
+#[derive(PartialEq, Clone, Copy)]
+enum RecordingMode {
+    Idle,
+    Hold,
+    Toggle,
+}
 
-/// Generate a 22×22 filled circle icon with the given RGB color.
 fn dot_icon(r: u8, g: u8, b: u8) -> tauri::image::Image<'static> {
     const SIZE: u32 = 22;
     let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
@@ -75,60 +82,92 @@ fn save_config(
 fn handle_recording(
     app: AppHandle,
     stop_signal: Arc<AtomicBool>,
-    is_recording: Arc<Mutex<bool>>,
+    recording_mode: Arc<Mutex<RecordingMode>>,
     config_path: Arc<PathBuf>,
+    transcriber: Arc<dyn Transcriber>,
 ) {
-    let tmp_path = PathBuf::from(std::env::temp_dir()).join("openfree_audio.wav");
-
     eprintln!("[openfree] recording started");
     emit_state(&app, "recording");
 
-    if let Err(e) = audio::record_to_file(&tmp_path, stop_signal) {
-        eprintln!("[openfree] record error: {}", e);
-        *is_recording.lock().unwrap() = false;
-        emit_state(&app, "error");
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        emit_state(&app, "idle");
-        return;
-    }
+    let samples = match audio::record_to_samples(stop_signal) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[openfree] record error: {}", e);
+            *recording_mode.lock().unwrap() = RecordingMode::Idle;
+            emit_state(&app, "error");
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            emit_state(&app, "idle");
+            return;
+        }
+    };
 
-    *is_recording.lock().unwrap() = false;
+    *recording_mode.lock().unwrap() = RecordingMode::Idle;
 
     let cfg = config::load(&config_path);
-    let prompt = if cfg.initial_prompt.is_empty() { None } else { Some(cfg.initial_prompt) };
+    let prompt = if cfg.initial_prompt.is_empty() {
+        None
+    } else {
+        Some(cfg.initial_prompt.as_str())
+    };
 
-    eprintln!("[openfree] sending to {}", SERVER_URL);
+    eprintln!("[openfree] transcribing ({} samples)", samples.len());
     emit_state(&app, "sending");
 
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    match rt.block_on(api::send_audio(&tmp_path, SERVER_URL, prompt)) {
+    match transcriber.transcribe(&samples, prompt) {
         Ok(text) if !text.is_empty() => {
             eprintln!("[openfree] got text: {:?}", text);
             if let Err(e) = inject::inject_text(&text) {
                 eprintln!("[openfree] inject error: {}", e);
             }
         }
-        Ok(_) => { eprintln!("[openfree] got empty response"); }
+        Ok(_) => {
+            eprintln!("[openfree] got empty transcript");
+        }
         Err(e) => {
-            eprintln!("[openfree] API error: {}", e);
+            eprintln!("[openfree] transcription error: {}", e);
             emit_state(&app, "error");
             std::thread::sleep(std::time::Duration::from_secs(2));
         }
     }
 
     emit_state(&app, "idle");
-    let _ = std::fs::remove_file(&tmp_path);
+}
+
+fn build_transcriber(cfg: &config::AppConfig) -> Arc<dyn Transcriber> {
+    if cfg.transcription_mode != "remote" {
+        if cfg.whisper_model_path.is_empty() {
+            eprintln!("[openfree] whisper_model_path not set, falling back to remote");
+        } else {
+            match whisper::LocalWhisper::new(&cfg.whisper_model_path) {
+                Ok(lw) => {
+                    eprintln!("[openfree] local Whisper model loaded: {}", cfg.whisper_model_path);
+                    return Arc::new(lw);
+                }
+                Err(e) => {
+                    eprintln!("[openfree] failed to load model, falling back to remote: {}", e);
+                }
+            }
+        }
+    }
+    eprintln!("[openfree] using remote backend: {}", cfg.server_url);
+    Arc::new(transcribe::RemoteApi::new(cfg.server_url.clone()))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let is_recording = Arc::new(Mutex::new(false));
+    let recording_mode = Arc::new(Mutex::new(RecordingMode::Idle));
     let stop_signal = Arc::new(AtomicBool::new(false));
 
-    let is_recording_clone = is_recording.clone();
-    let stop_signal_clone = stop_signal.clone();
+    let mode_clone = recording_mode.clone();
+    let stop_clone = stop_signal.clone();
 
-    let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
+    // Ctrl+Shift+Space = hold-to-talk
+    let hold_sc = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
+    // Ctrl+Shift+Alt+Space = toggle (press once to start, press again to stop)
+    let toggle_sc = Shortcut::new(
+        Some(Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT),
+        Code::Space,
+    );
 
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(
@@ -137,27 +176,61 @@ pub fn run() {
         ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_shortcut(shortcut)
-                .expect("failed to build shortcut")
-                .with_handler(move |app, _shortcut, event| {
+                .with_shortcut(hold_sc)
+                .expect("failed to register hold shortcut")
+                .with_shortcut(toggle_sc)
+                .expect("failed to register toggle shortcut")
+                .with_handler(move |app, shortcut, event| {
+                    // Detect which shortcut fired by checking for ALT modifier
+                    let is_toggle_key = shortcut.mods.contains(Modifiers::ALT);
+
                     match event.state() {
                         ShortcutState::Pressed => {
-                            let mut recording = is_recording_clone.lock().unwrap();
-                            if !*recording {
-                                *recording = true;
-                                stop_signal_clone.store(false, Ordering::Relaxed);
-                                drop(recording);
-                                let app = app.clone();
-                                let flag = is_recording_clone.clone();
-                                let stop = stop_signal_clone.clone();
-                                let config_path = app.state::<Arc<PathBuf>>().inner().clone();
-                                std::thread::spawn(move || {
-                                    handle_recording(app, stop, flag, config_path);
-                                });
+                            let mut mode = mode_clone.lock().unwrap();
+                            match *mode {
+                                RecordingMode::Idle => {
+                                    // Start a new recording
+                                    *mode = if is_toggle_key {
+                                        RecordingMode::Toggle
+                                    } else {
+                                        RecordingMode::Hold
+                                    };
+                                    stop_clone.store(false, Ordering::Relaxed);
+                                    drop(mode);
+
+                                    let app = app.clone();
+                                    let stop = stop_clone.clone();
+                                    let mode_ref = mode_clone.clone();
+                                    let config_path =
+                                        app.state::<Arc<PathBuf>>().inner().clone();
+                                    let transcriber =
+                                        app.state::<Arc<dyn Transcriber>>().inner().clone();
+                                    std::thread::spawn(move || {
+                                        handle_recording(
+                                            app,
+                                            stop,
+                                            mode_ref,
+                                            config_path,
+                                            transcriber,
+                                        );
+                                    });
+                                }
+                                RecordingMode::Toggle if is_toggle_key => {
+                                    // Second press of toggle key = stop
+                                    stop_clone.store(true, Ordering::Relaxed);
+                                }
+                                _ => {
+                                    // Ignore: other key pressed while already recording
+                                }
                             }
                         }
                         ShortcutState::Released => {
-                            stop_signal_clone.store(true, Ordering::Relaxed);
+                            let mode = mode_clone.lock().unwrap();
+                            if *mode == RecordingMode::Hold {
+                                drop(mode);
+                                stop_clone.store(true, Ordering::Relaxed);
+                            }
+                            // Toggle mode: ignore release events
                         }
                     }
                 })
@@ -165,21 +238,23 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![get_config, save_config])
         .setup(|app| {
-            // Store config path in app state
             let config_path = Arc::new(
-                app.path().app_config_dir()
+                app.path()
+                    .app_config_dir()
                     .expect("no app config dir")
-                    .join("config.json")
+                    .join("config.json"),
             );
             app.manage(config_path.clone());
 
-            // Apply autostart from saved config
+            // Build and store the transcriber (loads Whisper model once here)
             let cfg = config::load(&config_path);
             if cfg.autostart {
                 let _ = app.autolaunch().enable();
             }
+            let transcriber = build_transcriber(&cfg);
+            app.manage(transcriber);
 
-            // Position main window at bottom-center of primary monitor
+            // Position overlay window at bottom-center
             if let Some(window) = app.get_webview_window("main") {
                 if let Ok(Some(monitor)) = window.current_monitor() {
                     let size = monitor.size();
@@ -197,7 +272,8 @@ pub fn run() {
             use tauri::menu::{MenuBuilder, MenuItem};
             use tauri::tray::TrayIconBuilder;
 
-            let settings_item = MenuItem::with_id(app, "settings", "Settings...", true, None::<&str>)?;
+            let settings_item =
+                MenuItem::with_id(app, "settings", "Settings...", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit OpenFree", true, None::<&str>)?;
             let menu = MenuBuilder::new(app).items(&[&settings_item, &quit]).build()?;
 
@@ -208,7 +284,6 @@ pub fn run() {
                 .on_menu_event(|app, event| {
                     if event.id == "settings" {
                         if let Some(w) = app.get_webview_window("settings") {
-                            // Try to unminimize first, then show with focus
                             let _ = w.unminimize();
                             let _ = w.show();
                             let _ = w.set_focus();

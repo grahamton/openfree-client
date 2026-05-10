@@ -24,4 +24,10 @@ enigo = "0.2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-autostart = "2"
 arboard = "3"
+whisper-rs = { version = "0.16", default-features = false }
+
+[features]
+default = []
+# Build with `cargo tauri build --features gpu` to enable Vulkan GPU acceleration.
+gpu = ["whisper-rs/vulkan"]
 
