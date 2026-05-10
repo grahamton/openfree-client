@@ -30,7 +30,7 @@ Incremental improvements only. The app works — don't break it chasing features
 - [x] Local Whisper via `whisper-rs` — runs entirely on laptop, no server needed
 - [x] Toggle hotkey (`Ctrl+Shift+Alt+Space`) for hands-free long recordings
 - [x] Configurable backend (local vs remote) and model path in Settings
-- [ ] Build a proper installer (`.msi`) so the app doesn't require `npm run tauri dev` to run
+- [ ] Build a proper installer (`.msi`) for distribution — `npm run tauri build`, optionally bundle `ggml-base.en-q5_1.bin` so friends don't need a separate download
 - [ ] Configurable hotkey (currently hardcoded)
 - [ ] Auto-add cmake/LLVM to PATH in dev environment so the manual env var step isn't needed
 
