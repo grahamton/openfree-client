@@ -1,15 +1,15 @@
-mod audio;
 mod api;
-mod inject;
+mod audio;
 mod config;
+mod inject;
 mod transcribe;
 mod whisper;
 
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
-use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
@@ -33,7 +33,7 @@ fn dot_icon(r: u8, g: u8, b: u8) -> tauri::image::Image<'static> {
             let dy = y as f32 - center;
             if (dx * dx + dy * dy).sqrt() <= radius {
                 let i = ((y * SIZE + x) * 4) as usize;
-                rgba[i]     = r;
+                rgba[i] = r;
                 rgba[i + 1] = g;
                 rgba[i + 2] = b;
                 rgba[i + 3] = 255;
@@ -45,10 +45,10 @@ fn dot_icon(r: u8, g: u8, b: u8) -> tauri::image::Image<'static> {
 
 fn set_tray_icon(app: &AppHandle, state: &str) {
     let icon = match state {
-        "recording" => dot_icon(239, 68, 68),   // red
-        "sending"   => dot_icon(251, 146, 60),  // amber
-        "error"     => dot_icon(239, 68, 68),   // red
-        _           => dot_icon(156, 163, 175), // grey (idle)
+        "recording" => dot_icon(239, 68, 68), // red
+        "sending" => dot_icon(251, 146, 60),  // amber
+        "error" => dot_icon(239, 68, 68),     // red
+        _ => dot_icon(156, 163, 175),         // grey (idle)
     };
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_icon(Some(icon));
@@ -63,6 +63,30 @@ fn emit_state(app: &AppHandle, state: &str) {
 #[tauri::command]
 fn get_config(config_path: tauri::State<Arc<PathBuf>>) -> config::AppConfig {
     config::load(&config_path)
+}
+
+#[tauri::command]
+fn list_models() -> Vec<String> {
+    let models_dir = dirs::data_local_dir()
+        .map(|d| d.join("openfree").join("models"))
+        .unwrap_or_default();
+    if !models_dir.exists() {
+        let _ = std::fs::create_dir_all(&models_dir);
+        return vec![];
+    }
+    let mut models = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&models_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("bin") {
+                if let Some(s) = path.to_str() {
+                    models.push(s.to_string());
+                }
+            }
+        }
+    }
+    models.sort();
+    models
 }
 
 #[tauri::command]
@@ -140,11 +164,17 @@ fn build_transcriber(cfg: &config::AppConfig) -> Arc<dyn Transcriber> {
         } else {
             match whisper::LocalWhisper::new(&cfg.whisper_model_path) {
                 Ok(lw) => {
-                    eprintln!("[openfree] local Whisper model loaded: {}", cfg.whisper_model_path);
+                    eprintln!(
+                        "[openfree] local Whisper model loaded: {}",
+                        cfg.whisper_model_path
+                    );
                     return Arc::new(lw);
                 }
                 Err(e) => {
-                    eprintln!("[openfree] failed to load model, falling back to remote: {}", e);
+                    eprintln!(
+                        "[openfree] failed to load model, falling back to remote: {}",
+                        e
+                    );
                 }
             }
         }
@@ -201,8 +231,7 @@ pub fn run() {
                                     let app = app.clone();
                                     let stop = stop_clone.clone();
                                     let mode_ref = mode_clone.clone();
-                                    let config_path =
-                                        app.state::<Arc<PathBuf>>().inner().clone();
+                                    let config_path = app.state::<Arc<PathBuf>>().inner().clone();
                                     let transcriber =
                                         app.state::<Arc<dyn Transcriber>>().inner().clone();
                                     std::thread::spawn(move || {
@@ -236,7 +265,11 @@ pub fn run() {
                 })
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![get_config, save_config])
+        .invoke_handler(tauri::generate_handler![
+            get_config,
+            save_config,
+            list_models
+        ])
         .setup(|app| {
             let config_path = Arc::new(
                 app.path()
@@ -263,9 +296,8 @@ pub fn run() {
                     let win_h = 100.0_f64;
                     let x = (size.width as f64 / scale - win_w) / 2.0;
                     let y = size.height as f64 / scale - win_h - 24.0;
-                    let _ = window.set_position(tauri::Position::Logical(
-                        tauri::LogicalPosition::new(x, y),
-                    ));
+                    let _ = window
+                        .set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
                 }
             }
 
@@ -275,7 +307,9 @@ pub fn run() {
             let settings_item =
                 MenuItem::with_id(app, "settings", "Settings...", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit OpenFree", true, None::<&str>)?;
-            let menu = MenuBuilder::new(app).items(&[&settings_item, &quit]).build()?;
+            let menu = MenuBuilder::new(app)
+                .items(&[&settings_item, &quit])
+                .build()?;
 
             TrayIconBuilder::with_id("main")
                 .icon(dot_icon(156, 163, 175))
@@ -284,7 +318,6 @@ pub fn run() {
                 .on_menu_event(|app, event| {
                     if event.id == "settings" {
                         if let Some(w) = app.get_webview_window("settings") {
-                            let _ = w.unminimize();
                             let _ = w.show();
                             let _ = w.set_focus();
                         }

@@ -32,7 +32,7 @@ impl Transcriber for LocalWhisper {
         let mut state = ctx.create_state().map_err(|e| e.to_string())?;
 
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_language(Some("en"));
+        params.set_language(None); // auto-detect language
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_special(false);

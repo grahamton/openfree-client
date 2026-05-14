@@ -26,7 +26,7 @@
         "label": "settings",
         "title": "OpenFree Settings",
         "width": 480,
-        "height": 320,
+        "height": 520,
         "decorations": true,
         "transparent": false,
         "alwaysOnTop": false,

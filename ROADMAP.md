@@ -7,12 +7,14 @@ Incremental improvements only. The app works — don't break it chasing features
 ## Server-side
 
 ### Tier 1 — Quick wins
+
 - [x] Add `initial_prompt` to Whisper call with user vocabulary and common acronyms
 - [x] Tune prompt to ensure consistent punctuation and capitalization
 - [x] Pin Whisper model size so cold-start time is predictable (`large-v3-turbo`)
 - [x] Remove Ollama/LLM layer (simplified pipeline, ~1-2s latency)
 
 ### Tier 2 — Config and reliability
+
 - [x] Load `initial_prompt` from a config file (`/opt/docker/openfree/prompt.txt` — edit anytime, no rebuild)
 - [ ] Return a structured error when Whisper fails (currently returns generic 500)
 - [ ] Add a `/health` endpoint so the client can check server status
@@ -22,19 +24,25 @@ Incremental improvements only. The app works — don't break it chasing features
 ## Client-side
 
 ### Tier 1 — Quick wins
+
 - [x] Start on login (`tauri-plugin-autostart`)
 - [x] Show error state in pill when transcription fails
-- [x] Settings window: editable `initial_prompt` and personal vocabulary
+- [x] Settings window: editable `initial_prompt` and personal vocabulary (Transcription Prompt field)
 
 ### Tier 2 — Quality of life
+
 - [x] Local Whisper via `whisper-rs` — runs entirely on laptop, no server needed
 - [x] Toggle hotkey (`Ctrl+Shift+Alt+Space`) for hands-free long recordings
-- [x] Configurable backend (local vs remote) and model path in Settings
-- [ ] Build a proper installer (`.msi`) so the app doesn't require `npm run tauri dev` to run
+- [x] Configurable backend (local vs remote) in Settings
+- [x] Model dropdown in Settings — scans `%LOCALAPPDATA%\openfree\models\` automatically
+- [x] Release binary workflow — app runs independently, survives terminal close
+- [x] Settings window reopens reliably from tray (hide/show, not minimize)
+- [x] Language auto-detection (removed hardcoded English-only)
 - [ ] Configurable hotkey (currently hardcoded)
 - [ ] Auto-add cmake/LLVM to PATH in dev environment so the manual env var step isn't needed
 
 ### Tier 3 — Nice to have
+
 - [ ] LLM cleanup pass via LM Studio after transcription (punctuation polish, acronym expansion, style)
 - [ ] Per-app context: different prompt/vocabulary depending on the active window (Slack, VS Code, email, etc.)
 - [ ] Transcription history (last N injections, accessible from tray)

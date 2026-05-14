@@ -24,6 +24,7 @@ enigo = "0.2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-autostart = "2"
 arboard = "3"
+dirs = "5"
 whisper-rs = { version = "0.16", default-features = false }
 
 [features]

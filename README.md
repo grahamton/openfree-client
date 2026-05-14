@@ -4,10 +4,10 @@ A Windows dictation app. Press a hotkey to record, release (or press again) to t
 
 ## Hotkeys
 
-| Hotkey | Mode |
-|--------|------|
-| Hold `Ctrl+Shift+Space` | Hold-to-talk — release to transcribe |
-| `Ctrl+Shift+Alt+Space` | Toggle — press to start, press again to stop |
+| Hotkey                  | Mode                                         |
+| ----------------------- | -------------------------------------------- |
+| Hold `Ctrl+Shift+Space` | Hold-to-talk — release to transcribe         |
+| `Ctrl+Shift+Alt+Space`  | Toggle — press to start, press again to stop |
 
 Use toggle for longer recordings where holding the key is awkward.
 
@@ -22,7 +22,7 @@ Use toggle for longer recordings where holding the key is awkward.
 - **Tauri 2.x** — windowing, system tray, global hotkeys
 - **Rust** — audio capture (`cpal`), local inference (`whisper-rs`), text injection (`enigo` + `arboard`)
 - **React** — transparent pill overlay (recording / sending / error states)
-- **whisper.cpp** — local transcription, default model: `ggml-base.en-q5_1.bin`
+- **whisper.cpp** — local transcription, language auto-detected
 
 Remote server mode is still available as a fallback — configure in Settings.
 
@@ -39,44 +39,49 @@ winget install Kitware.CMake
 
 VS Build Tools 2022+ also required (usually installed by the Rust installer).
 
-### Run
+### Build
 
 ```powershell
+taskkill /F /IM openfree-client.exe 2>$null
 $env:PATH = "C:\Program Files\CMake\bin;C:\Program Files\LLVM\bin;$env:PATH"
 $env:LIBCLANG_PATH = "C:\Program Files\LLVM\bin"
 npm install
-npm run tauri dev
+npm run tauri build
 ```
 
-> Before restarting: kill any running instance first or hotkey registration will fail.
-> ```powershell
-> Stop-Process -Name openfree-client -Force -ErrorAction SilentlyContinue
-> ```
+Then launch the binary directly:
 
-First build compiles whisper.cpp and takes a few minutes. Subsequent builds are fast.
+```powershell
+Start-Process "C:\dev\openfree\src-tauri\target\release\openfree-client.exe"
+```
+
+> **Do not use `npm run tauri dev` to run the app** — the dev server ties the app process to the terminal. The release binary is detached and survives terminal close.
+
+First build compiles whisper.cpp (~5 min). Subsequent builds are ~20s.
 
 ## Models
 
-Download GGML models from [huggingface.co/ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp).
+Drop GGML `.bin` files into `%LOCALAPPDATA%\openfree\models\` — they appear automatically in the Settings dropdown.
 
-Recommended for local dictation:
+Download from [huggingface.co/ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp).
 
-| Model | Size | Speed | Notes |
-|-------|------|-------|-------|
-| `ggml-base.en-q5_1.bin` | 57 MB | ~1s | Best for short clips |
-| `ggml-small.en-q5_1.bin` | 97 MB | ~2-3s | Better on fast/mumbled speech |
-| `ggml-medium.en-q5_1.bin` | 515 MB | ~15s | Near-server quality |
+Currently installed:
 
-Store models in `%LOCALAPPDATA%\openfree\models\` and set the path in Settings.
+| Model                    | Size   | Latency | Notes                      |
+| ------------------------ | ------ | ------- | -------------------------- |
+| `ggml-base.en-q5_1.bin`  | 57 MB  | ~1s     | Default — fast, quiet fans |
+| `ggml-small.en-q5_1.bin` | 181 MB | ~3s     | Better on jargon/names     |
+
+Changing model requires an app restart.
 
 ## Settings
 
-Open from the system tray. Configure:
+Open from the system tray icon. Configure:
 
 - **Backend** — Local (Whisper on this machine) or Remote (home server)
-- **Model path** — path to a GGML `.bin` file
+- **Whisper Model** — dropdown of all `.bin` files in `%LOCALAPPDATA%\openfree\models\`
 - **Server URL** — remote server endpoint (remote mode only)
-- **Transcription prompt** — primes Whisper with your vocabulary, names, and acronyms
+- **Transcription Prompt** — primes Whisper with your vocabulary, names, and acronyms (acts as a custom dictionary)
 - **Start on login** — autostart via system tray
 
 Changes to backend/model require an app restart.
@@ -91,7 +96,7 @@ src-tauri/src/
   lib.rs                    Main wiring: hotkeys, tray, window, Transcriber routing
   audio.rs                  Mic capture → Vec<f32> at 16 kHz
   transcribe.rs             Transcriber trait + RemoteApi backend
-  whisper.rs                LocalWhisper backend (whisper-rs)
+  whisper.rs                LocalWhisper backend (whisper-rs), language auto-detected
   api.rs                    HTTP POST to remote transcription server
   inject.rs                 Clipboard write + Ctrl+V injection
   config.rs                 AppConfig load/save

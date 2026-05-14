@@ -21,6 +21,7 @@ const DEFAULT_CONFIG: AppConfig = {
 export function Settings() {
   const [config, setConfig] = useState<AppConfig>(DEFAULT_CONFIG);
   const [saved, setSaved] = useState(false);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
 
   const loadConfig = async () => {
     try {
@@ -31,11 +32,21 @@ export function Settings() {
     }
   };
 
+  const loadModels = async () => {
+    try {
+      const models = await invoke<string[]>("list_models");
+      setAvailableModels(models);
+    } catch (error) {
+      console.error("Failed to list models:", error);
+    }
+  };
+
   useEffect(() => {
     loadConfig();
+    loadModels();
     const window = getCurrentWebviewWindow();
     const unlisten = window.onFocusChanged(({ payload: focused }) => {
-      if (focused) loadConfig();
+      if (focused) { loadConfig(); loadModels(); }
     });
     return () => {
       unlisten.then((fn) => fn());
@@ -53,13 +64,9 @@ export function Settings() {
 
   async function handleClose() {
     try {
-      await getCurrentWebviewWindow().minimize();
-    } catch {
-      try {
-        await getCurrentWebviewWindow().hide();
-      } catch (err) {
-        console.error("Failed to hide settings window:", err);
-      }
+      await getCurrentWebviewWindow().hide();
+    } catch (err) {
+      console.error("Failed to hide settings window:", err);
     }
   }
 
@@ -87,22 +94,34 @@ export function Settings() {
       {/* Local: model path */}
       {isLocal && (
         <div style={{ marginTop: "16px" }}>
-          <label style={labelStyle}>Whisper Model Path</label>
+          <label style={labelStyle}>Whisper Model</label>
           <p style={hintStyle}>
-            Path to a GGML .bin file — e.g.{" "}
+            Models are loaded from{" "}
             <code style={{ fontSize: "11px", background: "#f4f4f4", padding: "1px 4px", borderRadius: "3px" }}>
-              ggml-base.en-q5_1.bin
-            </code>.{" "}
-            Download models from{" "}
-            <span style={{ color: "#2563eb" }}>huggingface.co/ggerganov/whisper.cpp</span>.
+              %LOCALAPPDATA%\openfree\models\
+            </code>.
+            Drop <code style={{ fontSize: "11px", background: "#f4f4f4", padding: "1px 4px", borderRadius: "3px" }}>.bin</code> files there and re-open settings.
+            Changes take effect after restarting the app.
           </p>
-          <input
-            type="text"
-            value={config.whisper_model_path}
-            onChange={e => setConfig(c => ({ ...c, whisper_model_path: e.target.value }))}
-            placeholder="C:\Users\you\models\ggml-base.en-q5_1.bin"
-            style={inputStyle}
-          />
+          {availableModels.length > 0 ? (
+            <select
+              value={config.whisper_model_path}
+              onChange={e => setConfig(c => ({ ...c, whisper_model_path: e.target.value }))}
+              style={{ ...inputStyle, height: "32px", padding: "4px 8px" }}
+            >
+              <option value="">— select a model —</option>
+              {availableModels.map(p => (
+                <option key={p} value={p}>
+                  {p.replace(/\\/g, "/").split("/").pop()}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <p style={{ ...hintStyle, color: "#dc2626" }}>
+              No models found. Add <code>.bin</code> files to{" "}
+              <code style={{ fontSize: "11px" }}>%LOCALAPPDATA%\openfree\models\</code>.
+            </p>
+          )}
         </div>
       )}
 
