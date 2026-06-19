@@ -28,3 +28,14 @@ dist-ssr
 
 # Planning docs
 \# OpenFree*
+
+# Scratch and build log files
+build_gpu_log.txt
+stdout.txt
+stderr.txt
+nul
+.agents/
+tests/e2e/test-results/
+
+
+

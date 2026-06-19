@@ -1,13 +1,15 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
+use std::sync::{Arc, Mutex};
 
 const TARGET_RATE: u32 = 16000;
-const MAX_RECORDING_SECS: u64 = 10 * 60; // 10-minute soft cap
 
-pub fn record_to_samples(stop_signal: Arc<AtomicBool>) -> Result<Vec<f32>, String> {
+pub struct ActiveRecording {
+    pub stream: cpal::Stream,
+    pub buffer: Arc<Mutex<Vec<f32>>>,
+    pub source_rate: u32,
+}
+
+pub fn start_recording() -> Result<ActiveRecording, String> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -39,30 +41,15 @@ pub fn record_to_samples(stop_signal: Arc<AtomicBool>) -> Result<Vec<f32>, Strin
 
     stream.play().map_err(|e| e.to_string())?;
 
-    let start = std::time::Instant::now();
-    while !stop_signal.load(Ordering::Relaxed) {
-        if start.elapsed().as_secs() >= MAX_RECORDING_SECS {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-
-    drop(stream);
-
-    let samples = Arc::try_unwrap(buffer)
-        .map_err(|_| "Buffer still in use".to_string())?
-        .into_inner()
-        .map_err(|e| e.to_string())?;
-
-    if sample_rate == TARGET_RATE {
-        return Ok(samples);
-    }
-
-    Ok(resample_to_16k(&samples, sample_rate))
+    Ok(ActiveRecording {
+        stream,
+        buffer,
+        source_rate: sample_rate,
+    })
 }
 
 /// Linear interpolation downsample to 16 kHz. Good enough for voice dictation.
-fn resample_to_16k(samples: &[f32], source_rate: u32) -> Vec<f32> {
+pub fn resample_to_16k(samples: &[f32], source_rate: u32) -> Vec<f32> {
     let ratio = source_rate as f64 / TARGET_RATE as f64;
     let out_len = (samples.len() as f64 / ratio) as usize;
     (0..out_len)

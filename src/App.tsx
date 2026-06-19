@@ -8,17 +8,34 @@ type AppState = "idle" | "recording" | "sending" | "error";
 
 function App() {
   const [state, setState] = useState<AppState>("idle");
+  const [previewText, setPreviewText] = useState("");
   const isSettings = getCurrentWebviewWindow().label === "settings";
 
   useEffect(() => {
     if (isSettings) return;
-    const unlisten = listen<AppState>("dictation-state", (event) => {
+    const unlistenState = listen<AppState>("dictation-state", (event) => {
       setState(event.payload);
+      if (event.payload === "idle") {
+        setPreviewText("");
+      }
+    });
+    const unlistenPreview = listen<{ text: string }>("dictation-preview", (event) => {
+      setPreviewText(event.payload.text);
     });
     return () => {
-      unlisten.then((f) => f());
+      unlistenState.then((f) => f());
+      unlistenPreview.then((f) => f());
     };
   }, [isSettings]);
+
+  useEffect(() => {
+    if (isSettings) return;
+    if (state !== "idle") {
+      getCurrentWebviewWindow().show();
+    } else {
+      getCurrentWebviewWindow().hide();
+    }
+  }, [state, isSettings]);
 
   if (isSettings) return <Settings />;
 
@@ -31,7 +48,7 @@ function App() {
         overflow: "hidden",
       }}
     >
-      <Pill state={state} />
+      <Pill state={state} previewText={previewText} />
     </div>
   );
 }

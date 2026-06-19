@@ -25,16 +25,16 @@ A Windows Tauri 2.x desktop app: press a hotkey → records audio → transcribe
 
 | File                          | Purpose                                                                               |
 | ----------------------------- | ------------------------------------------------------------------------------------- |
-| `src-tauri/src/lib.rs`        | Main wiring: hotkeys, tray, window, Transcriber routing                               |
-| `src-tauri/src/audio.rs`      | `record_to_samples(stop_signal)` → `Vec<f32>` at 16 kHz                               |
+| `src-tauri/src/lib.rs`        | Main wiring: hotkeys, tray, window, streaming loop, WAV debug, Transcriber routing    |
+| `src-tauri/src/audio.rs`      | `start_recording()` → `ActiveRecording` with shared buffer; `resample_to_16k()`       |
 | `src-tauri/src/transcribe.rs` | `Transcriber` trait + `RemoteApi` backend                                             |
 | `src-tauri/src/whisper.rs`    | `LocalWhisper` backend wrapping `whisper_rs::WhisperContext` — language auto-detected |
 | `src-tauri/src/api.rs`        | `send_audio(path, url)` → `Ok(String)` (remote only)                                  |
 | `src-tauri/src/inject.rs`     | `inject_text(text)` — clipboard + Ctrl+V                                              |
-| `src-tauri/src/config.rs`     | `AppConfig` with serde defaults — load/save                                           |
-| `src/App.tsx`                 | Listens for `dictation-state` event, renders `<Pill>`                                 |
-| `src/components/Pill.tsx`     | Pill UI (idle → hidden, recording/sending/error → visible)                            |
-| `src/components/Settings.tsx` | Settings window: backend, model dropdown, server URL, prompt, autostart               |
+| `src-tauri/src/config.rs`     | `AppConfig` with serde defaults — load/save; includes `local_backend` field            |
+| `src/App.tsx`                 | Listens for `dictation-state` + `dictation-preview` events, renders `<Pill>`          |
+| `src/components/Pill.tsx`     | Pill overlay — shows live preview text during recording, status during send/error      |
+| `src/components/Settings.tsx` | Settings: backend, model, GPU accel, server URL, prompt, autostart, debug playback    |
 | `src-tauri/tauri.conf.json`   | Window: 400×100, transparent, alwaysOnTop, visible=false                              |
 
 ## How to run
@@ -54,6 +54,39 @@ $env:PATH = "C:\Program Files\CMake\bin;C:\Program Files\LLVM\bin;$env:PATH"
 $env:LIBCLANG_PATH = "C:\Program Files\LLVM\bin"
 npm run tauri build
 ```
+
+**Build with CUDA GPU support** (RTX 5060, CUDA 13.2):
+
+```powershell
+taskkill /F /IM openfree-client.exe 2>$null
+
+# Source MSVC environment
+$vcvars = cmd /c "`"C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvarsall.bat`" x64 2>&1 && set" 2>&1
+$vcvars | Where-Object { $_ -match "^([^=]+)=(.+)$" } | ForEach-Object { if ($_ -match "^([^=]+)=(.+)$") { [System.Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], "Process") } }
+
+# Set CUDA/build vars (must come AFTER vcvarsall import)
+$env:CUDA_PATH = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2"
+$env:LIBCLANG_PATH = "C:\Program Files\LLVM\bin"
+$env:CMAKE_GENERATOR = "Ninja"
+$env:PATH = "C:\Program Files\CMake\bin;C:\Program Files\LLVM\bin;C:\Users\graha\AppData\Local\Microsoft\WinGet\Links;$env:CUDA_PATH\bin;$env:PATH"
+
+Set-Location c:\dev\openfree\src-tauri
+cargo build --release --features gpu
+```
+
+**Build with Vulkan GPU support** (cross-platform — no CUDA SDK needed):
+
+```powershell
+taskkill /F /IM openfree-client.exe 2>$null
+$env:PATH = "C:\Program Files\CMake\bin;C:\Program Files\LLVM\bin;$env:PATH"
+$env:LIBCLANG_PATH = "C:\Program Files\LLVM\bin"
+Set-Location c:\dev\openfree\src-tauri
+cargo build --release --features vulkan
+```
+
+> **Vulkan SDK:** Install the [Vulkan SDK](https://vulkan.lunarg.com/) if `whisper-rs-sys` can't find Vulkan headers. Most modern GPU drivers already include the Vulkan runtime.
+
+> **Why CUDA is complex:** CMake 4.3 auto-selects "Visual Studio 18 2026" generator, which nvcc 13.2 rejects due to a stale `CMAKE_GENERATOR_INSTANCE` in cache. The fix is: (1) use Ninja generator instead, (2) source vcvarsall.bat so cl.exe is in PATH, (3) delete stale cache dirs if you switch generators mid-session: `Remove-Item "target\release\build\whisper-rs-sys-*" -Recurse -Force`.
 
 **Launch the built binary:**
 
@@ -75,7 +108,9 @@ First build compiles whisper.cpp (~5 min). Subsequent builds are ~20s.
 - **Model scanning:** `list_models` Tauri command scans `%LOCALAPPDATA%\openfree\models\` for `.bin` files. Settings shows a dropdown, not a text input.
 - **Audio state flows:** `idle → recording → sending → idle` (or `error → idle`). The `dictation-state` Tauri event drives the frontend pill and tray icon.
 - **Toggle vs hold:** `RecordingMode` enum (`Idle/Hold/Toggle`) in a `Mutex` tracks which mode is active. Hold key `Released` only stops recording if mode is `Hold`.
-- **Vulkan GPU build:** `cargo build --features gpu` — requires Vulkan SDK. Default is CPU-only.
+- **GPU builds:** `cargo build --release --features gpu` (CUDA) or `--features vulkan` (Vulkan) from `src-tauri/`. Default is CPU-only. The `local_backend` config field controls runtime GPU usage (`"cpu"`, `"cuda"`, or `"vulkan"`).
+- **Streaming transcription:** During recording, audio is transcribed in ~500ms chunk snapshots. Partial results are emitted via `dictation-preview` Tauri event. Final full-pass transcription runs after stop.
+- **Debug WAV:** Every recording is saved to `%TEMP%\openfree_debug.wav` (single file, always overwritten). Playable from the Settings "Play Last Recording" button via `play_debug_wav` Tauri command.
 
 ## Models installed
 

@@ -8,6 +8,14 @@ interface AppConfig {
   transcription_mode: string;
   whisper_model_path: string;
   server_url: string;
+  ai_cleanup_enabled: boolean;
+  ai_backend: string;
+  ai_model: string;
+  ai_ollama_url: string;
+  openai_api_key: string;
+  ai_lmstudio_url: string;
+  ai_mode: string;
+  local_backend: string;
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -16,12 +24,30 @@ const DEFAULT_CONFIG: AppConfig = {
   transcription_mode: "local",
   whisper_model_path: "",
   server_url: "http://100.120.247.76:8766/transcribe",
+  ai_cleanup_enabled: false,
+  ai_backend: "lmstudio",
+  ai_model: "local-model",
+  ai_ollama_url: "http://localhost:11434",
+  openai_api_key: "",
+  ai_lmstudio_url: "http://localhost:1234",
+  ai_mode: "cleanup",
+  local_backend: "cpu",
 };
 
 export function Settings() {
   const [config, setConfig] = useState<AppConfig>(DEFAULT_CONFIG);
   const [saved, setSaved] = useState(false);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
+
+  async function handlePlayBack() {
+    try {
+      setPlaybackError(null);
+      await invoke("play_debug_wav");
+    } catch (err: any) {
+      setPlaybackError(err.toString());
+    }
+  }
 
   const loadConfig = async () => {
     try {
@@ -125,6 +151,22 @@ export function Settings() {
         </div>
       )}
 
+      {/* GPU Backend Dropdown under local settings */}
+      {isLocal && (
+        <div style={{ marginTop: "16px" }}>
+          <label style={labelStyle}>Hardware Acceleration</label>
+          <select
+            value={config.local_backend}
+            onChange={e => setConfig(c => ({ ...c, local_backend: e.target.value }))}
+            style={{ ...inputStyle, height: "32px", padding: "4px 8px" }}
+          >
+            <option value="cpu">CPU (No GPU Acceleration)</option>
+            <option value="cuda">CUDA (Nvidia GPU)</option>
+            <option value="vulkan">Vulkan (Cross-Platform GPU)</option>
+          </select>
+        </div>
+      )}
+
       {/* Remote: server URL */}
       {!isLocal && (
         <div style={{ marginTop: "16px" }}>
@@ -166,6 +208,132 @@ export function Settings() {
         />
         Start on login
       </label>
+
+      {/* AI Cleanup */}
+      <div style={{ borderTop: "1px solid #eee", paddingTop: "16px", marginTop: "4px" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px", fontSize: "13px", cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={config.ai_cleanup_enabled}
+            onChange={e => setConfig(c => ({ ...c, ai_cleanup_enabled: e.target.checked }))}
+          />
+          <span style={{ fontWeight: 500 }}>AI Cleanup</span>
+        </label>
+        <p style={hintStyle}>
+          Pass the raw transcript through an LLM to remove filler words and fix grammar — like Wispr Flow.
+        </p>
+
+        {config.ai_cleanup_enabled && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginTop: "8px" }}>
+            <div style={{ display: "flex", gap: "12px" }}>
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>Backend</label>
+                <select
+                  value={config.ai_backend}
+                  onChange={e => {
+                    const b = e.target.value;
+                    setConfig(c => ({
+                      ...c,
+                      ai_backend: b,
+                      ai_model: b === "openai" ? "gpt-4o-mini" : b === "ollama" ? "llama3.2" : "local-model",
+                    }));
+                  }}
+                  style={{ ...inputStyle, height: "32px", padding: "4px 8px" }}
+                >
+                  <option value="lmstudio">LM Studio (local)</option>
+                  <option value="ollama">Ollama (local)</option>
+                  <option value="openai">OpenAI API</option>
+                </select>
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>Mode</label>
+                <select
+                  value={config.ai_mode}
+                  onChange={e => setConfig(c => ({ ...c, ai_mode: e.target.value }))}
+                  style={{ ...inputStyle, height: "32px", padding: "4px 8px" }}
+                >
+                  <option value="cleanup">Cleanup — fix fillers &amp; grammar</option>
+                  <option value="smart">Smart — rewrite for clarity</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label style={labelStyle}>Model</label>
+              <input
+                type="text"
+                value={config.ai_model}
+                onChange={e => setConfig(c => ({ ...c, ai_model: e.target.value }))}
+                placeholder={config.ai_backend === "openai" ? "gpt-4o-mini" : "llama3.2"}
+                style={inputStyle}
+              />
+            </div>
+
+            {config.ai_backend === "lmstudio" && (
+              <div>
+                <label style={labelStyle}>LM Studio URL</label>
+                <input
+                  type="text"
+                  value={config.ai_lmstudio_url}
+                  onChange={e => setConfig(c => ({ ...c, ai_lmstudio_url: e.target.value }))}
+                  placeholder="http://localhost:1234"
+                  style={inputStyle}
+                />
+                <p style={{ ...hintStyle, marginTop: "4px" }}>
+                  LM Studio ignores the model name — it uses whichever model is currently loaded.
+                </p>
+              </div>
+            )}
+
+            {config.ai_backend === "ollama" && (
+              <div>
+                <label style={labelStyle}>Ollama URL</label>
+                <input
+                  type="text"
+                  value={config.ai_ollama_url}
+                  onChange={e => setConfig(c => ({ ...c, ai_ollama_url: e.target.value }))}
+                  placeholder="http://localhost:11434"
+                  style={inputStyle}
+                />
+              </div>
+            )}
+
+            {config.ai_backend === "openai" && (
+              <div>
+                <label style={labelStyle}>OpenAI API Key</label>
+                <input
+                  type="password"
+                  value={config.openai_api_key}
+                  onChange={e => setConfig(c => ({ ...c, openai_api_key: e.target.value }))}
+                  placeholder="sk-..."
+                  style={inputStyle}
+                />
+                <p style={{ ...hintStyle, marginTop: "4px" }}>
+                  Stored locally in config.json. Uses gpt-4o-mini by default (~$0.0001 per transcription).
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Audio Debugging */}
+      <div style={{ borderTop: "1px solid #eee", paddingTop: "16px", marginTop: "16px" }}>
+        <label style={labelStyle}>Audio Debugging</label>
+        <p style={hintStyle}>
+          Play back the last recorded audio file to verify microphone quality and volume.
+        </p>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <button onClick={handlePlayBack} style={secondaryBtn}>
+            Play Last Recording
+          </button>
+          {playbackError && (
+            <span style={{ fontSize: "12px", color: "#dc2626" }}>
+              {playbackError}
+            </span>
+          )}
+        </div>
+      </div>
 
       {/* Hotkey reminder */}
       <p style={{ ...hintStyle, marginBottom: "16px", borderTop: "1px solid #eee", paddingTop: "12px" }}>

@@ -1,5 +1,6 @@
 mod api;
 mod audio;
+mod cleanup;
 mod config;
 mod inject;
 mod transcribe;
@@ -89,6 +90,54 @@ fn list_models() -> Vec<String> {
     models
 }
 
+fn save_wav(path: &std::path::Path, samples: &[f32]) -> Result<(), String> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec).map_err(|e| e.to_string())?;
+    for &sample in samples {
+        let amplitude = (sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
+        writer.write_sample(amplitude).map_err(|e| e.to_string())?;
+    }
+    writer.finalize().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn play_debug_wav() -> Result<(), String> {
+    let wav_path = std::env::temp_dir().join("openfree_debug.wav");
+    if !wav_path.exists() {
+        return Err("No recording found. Record some audio first.".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&wav_path)
+            .spawn()
+            .map_err(|e| format!("Failed to spawn explorer: {}", e))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&wav_path)
+            .spawn()
+            .map_err(|e| format!("Failed to spawn open: {}", e))?;
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&wav_path)
+            .spawn()
+            .map_err(|e| format!("Failed to spawn xdg-open: {}", e))?;
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 fn save_config(
     app: AppHandle,
@@ -113,8 +162,8 @@ fn handle_recording(
     eprintln!("[openfree] recording started");
     emit_state(&app, "recording");
 
-    let samples = match audio::record_to_samples(stop_signal) {
-        Ok(s) => s,
+    let active_recording = match audio::start_recording() {
+        Ok(rec) => rec,
         Err(e) => {
             eprintln!("[openfree] record error: {}", e);
             *recording_mode.lock().unwrap() = RecordingMode::Idle;
@@ -125,8 +174,6 @@ fn handle_recording(
         }
     };
 
-    *recording_mode.lock().unwrap() = RecordingMode::Idle;
-
     let cfg = config::load(&config_path);
     let prompt = if cfg.initial_prompt.is_empty() {
         None
@@ -134,24 +181,93 @@ fn handle_recording(
         Some(cfg.initial_prompt.as_str())
     };
 
-    eprintln!("[openfree] transcribing ({} samples)", samples.len());
+    // Simple wait loop — no streaming inference on CPU (it holds the
+    // Whisper mutex and forces the final pass to wait, adding latency).
+    while !stop_signal.load(Ordering::Relaxed) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    // Immediately transition UI: recording (red) → sending (amber).
     emit_state(&app, "sending");
 
-    match transcriber.transcribe(&samples, prompt) {
-        Ok(text) if !text.is_empty() => {
-            eprintln!("[openfree] got text: {:?}", text);
-            if let Err(e) = inject::inject_text(&text) {
-                eprintln!("[openfree] inject error: {}", e);
+    // Drop CPAL stream to stop recording.
+    drop(active_recording.stream);
+
+    let final_samples = {
+        let buf = active_recording.buffer.lock().unwrap();
+        buf.clone()
+    };
+    let samples = audio::resample_to_16k(&final_samples, active_recording.source_rate);
+
+    eprintln!(
+        "[openfree] recorded {:.2}s audio ({} samples at {}Hz)",
+        final_samples.len() as f32 / active_recording.source_rate as f32,
+        samples.len(),
+        active_recording.source_rate
+    );
+
+    // Save debug WAV in the background — doesn't block injection.
+    {
+        let wav_samples = samples.clone();
+        std::thread::spawn(move || {
+            let wav_path = std::env::temp_dir().join("openfree_debug.wav");
+            if let Err(e) = save_wav(&wav_path, &wav_samples) {
+                eprintln!("[openfree] failed to save debug wav: {}", e);
             }
-        }
-        Ok(_) => {
-            eprintln!("[openfree] got empty transcript");
+        });
+    }
+
+    *recording_mode.lock().unwrap() = RecordingMode::Idle;
+
+    // Single fast transcription pass.
+    let t_transcribe = std::time::Instant::now();
+    let raw = match transcriber.transcribe(&samples, prompt) {
+        Ok(text) => {
+            eprintln!("[openfree] transcribe: {:?}", t_transcribe.elapsed());
+            text
         }
         Err(e) => {
             eprintln!("[openfree] transcription error: {}", e);
             emit_state(&app, "error");
             std::thread::sleep(std::time::Duration::from_secs(2));
+            emit_state(&app, "idle");
+            return;
         }
+    };
+
+    if !raw.is_empty() {
+        eprintln!("[openfree] got text: {:?}", raw);
+        let text = if cfg.ai_cleanup_enabled {
+            match cleanup::cleanup_text(
+                &raw,
+                &cfg.ai_backend,
+                &cfg.ai_model,
+                &cfg.ai_mode,
+                &cfg.ai_ollama_url,
+                &cfg.ai_lmstudio_url,
+                &cfg.openai_api_key,
+            ) {
+                Ok(cleaned) if !cleaned.is_empty() => {
+                    eprintln!("[openfree] cleaned: {:?}", cleaned);
+                    cleaned
+                }
+                Ok(_) => {
+                    eprintln!("[openfree] cleanup returned empty, using formatted raw");
+                    cleanup::fallback_format(&raw)
+                }
+                Err(e) => {
+                    eprintln!("[openfree] cleanup error (using formatted raw): {}", e);
+                    cleanup::fallback_format(&raw)
+                }
+            }
+        } else {
+            cleanup::fallback_format(&raw)
+        };
+        if let Err(e) = inject::inject_text(&text) {
+            eprintln!("[openfree] inject error: {}", e);
+        }
+    } else {
+        eprintln!("[openfree] got empty transcript");
     }
 
     emit_state(&app, "idle");
@@ -162,7 +278,7 @@ fn build_transcriber(cfg: &config::AppConfig) -> Arc<dyn Transcriber> {
         if cfg.whisper_model_path.is_empty() {
             eprintln!("[openfree] whisper_model_path not set, falling back to remote");
         } else {
-            match whisper::LocalWhisper::new(&cfg.whisper_model_path) {
+            match whisper::LocalWhisper::new(&cfg.whisper_model_path, &cfg.local_backend) {
                 Ok(lw) => {
                     eprintln!(
                         "[openfree] local Whisper model loaded: {}",
@@ -265,10 +381,19 @@ pub fn run() {
                 })
                 .build(),
         )
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "settings" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_config,
             save_config,
-            list_models
+            list_models,
+            play_debug_wav
         ])
         .setup(|app| {
             let config_path = Arc::new(
@@ -332,3 +457,4 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
